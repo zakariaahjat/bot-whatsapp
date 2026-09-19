@@ -8,7 +8,7 @@ How it works: every incoming WhatsApp message is sent to Claude along with your 
 
 - Node.js 18 or newer (check with `node -v`)
 - A WhatsApp number to dedicate to the bot (works with a normal number — it connects like WhatsApp Web)
-- An Anthropic API key: https://console.anthropic.com/settings/keys
+- A free Gemini API key: https://aistudio.google.com/apikey
 
 ## 2. Setup
 
@@ -17,7 +17,7 @@ npm install
 cp .env.example .env
 ```
 
-Open `.env` and paste your `ANTHROPIC_API_KEY`.
+Open `.env` and paste your `GEMINI_API_KEY` (see `.env.example`).
 
 ## 3. Add your data
 
@@ -29,9 +29,26 @@ Edit `database.json` with your real catalog / FAQ. Structure is up to you — Cl
 npm start
 ```
 
-A QR code will print in your terminal. On your phone: **WhatsApp > Settings > Linked Devices > Link a Device**, then scan it. Once connected, the bot will reply to any message sent to that number.
+A QR code will print in your terminal, and the same QR/status page is served at `http://localhost:3000`. On your phone: **WhatsApp > Settings > Linked Devices > Link a Device**, then scan it. Once connected, the bot will reply to any message sent to that number.
 
-Your session is saved in `./auth_info` so you won't need to re-scan on restart — don't commit that folder to git, it's equivalent to your login.
+Your session is saved in `./auth_info` so you won't need to re-scan on restart — don't commit that folder to git, it's equivalent to your login. To log in again, hit the `/reset` endpoint or delete `./auth_info`.
+
+## Deploy on Render (free)
+
+This repo includes a `render.yaml`, so you can deploy with one click:
+
+1. Push this repo to GitHub (already done).
+2. Go to https://render.com and sign up (GitHub login).
+3. In the Render dashboard: **New + → Blueprint**, select this repo.
+4. When it asks for the env vars, set **`GEMINI_API_KEY`** to your key from https://aistudio.google.com/apikey (get a free one). Others have sensible defaults.
+5. Deploy. Wait ~2–5 min for the build, then open the service's URL `https://<your-app>.onrender.com` — you'll see the QR code. Scan it with your phone.
+6. The bot now runs 24/7. Open the same URL any time to check status or **reset** the session.
+
+Notes:
+- **Free-tier disk is not persistent** — if the service restarts or you redeploy, the WhatsApp session may be lost and you'll need to re-scan the QR (the `/reset` page helps).
+- The dashboard/instance stays awake as long as WhatsApp keeps a connection alive; on the free plan Render may spin it down after long idle periods, which will disconnect and auto-reconnect the bot (it reconnects itself via `startBot()`).
+- No persistent database of chat history is kept — conversation memory resets on restart, same as locally.
+- Prefer a truly always-on host with a persistent session? Use an Oracle Cloud "Always Free" VM instead (see the note in the files section).
 
 ## 5. Test it
 
@@ -61,7 +78,8 @@ pm2 startup   # follow the printed instructions to enable on boot
 
 ## File overview
 
-- `index.js` — connects to WhatsApp, listens for messages, sends replies
-- `claudeHandler.js` — builds the prompt (your database + language rules) and calls Claude
+- `index.js` — connects to WhatsApp, serves the QR/status page, listens for messages, sends replies
+- `claudeHandler.js` — builds the prompt (your database + language rules) and calls the Gemini API
+- `render.yaml` — one-click Render deployment config
 - `database.json` — your data, edit this freely; changes apply on the next message, no restart needed
 - `.env` — your API key and settings (never commit this)

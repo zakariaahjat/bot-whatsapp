@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: bot-whatsapp
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GEMINI_API_KEY
+        value: ""
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash
+        sync: false
+      - key: BUSINESS_NAME
+        value: UltraPC.ma
+        sync: false
+      - key: HISTORY_LIMIT
+        value: "6"
+        sync: false
