@@ -19,11 +19,50 @@ const logger = pino({ level: "silent" }); // set to "info" or "debug" to see Bai
 
 // Latest state, shared with the status page served over HTTP.
 const status = { qr: null, connected: false, loggedOut: false };
+const processedMessageIds = new Map();
+const senderQueues = new Map();
+const MAX_PROCESSED_MESSAGES = 1000;
+
+function hasProcessedMessage(id) {
+  if (!id || processedMessageIds.has(id)) return true;
+  processedMessageIds.set(id, Date.now());
+  if (processedMessageIds.size > MAX_PROCESSED_MESSAGES) {
+    processedMessageIds.delete(processedMessageIds.keys().next().value);
+  }
+  return false;
+}
+
+function queueForSender(senderId, work) {
+  const previous = senderQueues.get(senderId) || Promise.resolve();
+  const next = previous.catch(() => {}).then(work);
+  senderQueues.set(senderId, next);
+  next.finally(() => {
+    if (senderQueues.get(senderId) === next) senderQueues.delete(senderId);
+  });
+  return next;
+}
+
+let restartScheduled = false;
+
+function restartBot() {
+  if (restartScheduled) return;
+  restartScheduled = true;
+  setTimeout(() => {
+    restartScheduled = false;
+    startBot().catch((err) => {
+      console.error("Failed to start bot:", err);
+      process.exit(1);
+    });
+  }, 1000);
+}
 
 function resetSession() {
   fs.rmSync("./auth_info", { recursive: true, force: true });
-  console.log("Session deleted. Exiting so the bot restarts and prints a fresh QR.");
-  process.exit(0);
+  status.qr = null;
+  status.connected = false;
+  status.loggedOut = false;
+  console.log("Session cleared. Starting fresh and printing a new QR code...");
+  restartBot();
 }
 
 function startStatusServer() {
@@ -53,7 +92,7 @@ function startStatusServer() {
         <p><a href="/reset">Reset session</a> (only if the QR is expired or you were logged out)</p>`;
     }
 
-    res.end(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><title>WhatsApp Bot</title><style>body{font-family:system-ui,sans-serif;text-align:center;padding:2rem}img{max-width:90%;height:auto}form{display:inline}</style></head><body>${body}</body></html>`);
+    res.end(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Tourism Bot</title><style>body{font-family:system-ui,sans-serif;text-align:center;padding:2rem}img{max-width:90%;height:auto}form{display:inline}</style></head><body>${body}</body></html>`);
   });
 
   const port = process.env.PORT || 3000;
@@ -84,11 +123,19 @@ async function startBot() {
 
     if (connection === "close") {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+      if (statusCode === DisconnectReason.loggedOut) {
+        status.connected = false;
+        status.loggedOut = true;
+        console.log("⚠️ Logged out of WhatsApp remotely. Clearing the session and printing a fresh QR code...");
+        resetSession();
+        return;
+      }
+
       status.connected = false;
-      status.loggedOut = !shouldReconnect;
-      console.log("Connection closed.", shouldReconnect ? "Reconnecting..." : "Logged out, delete ./auth_info to log in again.");
-      if (shouldReconnect) startBot();
+      status.loggedOut = false;
+      console.log("Connection closed. Reconnecting...");
+      restartBot();
     } else if (connection === "open") {
       status.connected = true;
       status.loggedOut = false;
@@ -103,7 +150,7 @@ async function startBot() {
 
     for (const msg of messages) {
       try {
-        if (!msg.message || msg.key.fromMe) continue;
+        if (!msg.message || msg.key.fromMe || hasProcessedMessage(msg.key.id)) continue;
 
         const senderId = msg.key.remoteJid;
         if (!senderId || senderId.endsWith("@g.us")) continue; // skip group chats
@@ -116,14 +163,14 @@ async function startBot() {
 
         if (!text.trim()) continue; // ignore non-text messages (images, stickers, etc.)
 
-        console.log(`📩 ${senderId}: ${text}`);
-
-        await sock.sendPresenceUpdate("composing", senderId);
-
-        const reply = await answerQuestion(senderId, text);
-
-        await sock.sendMessage(senderId, { text: reply });
-        console.log(`📤 ${senderId}: ${reply}`);
+        await queueForSender(senderId, async () => {
+          console.log(`📩 ${senderId}: ${text}`);
+          await sock.sendPresenceUpdate("composing", senderId);
+          const reply = await answerQuestion(senderId, text);
+          await sock.sendMessage(senderId, { text: reply });
+          await sock.sendPresenceUpdate("paused", senderId);
+          console.log(`📤 ${senderId}: ${reply}`);
+        });
       } catch (err) {
         console.error("Error handling message:", err);
         try {

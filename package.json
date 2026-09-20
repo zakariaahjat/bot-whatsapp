@@ -1,5 +1,5 @@
 {
-  "name": "ultrapc-whatsapp-bot",
+  "name": "tourism-whatsapp-bot",
   "version": "1.0.0",
   "description": "WhatsApp bot that answers customer questions from a JSON database, in English, French, Arabic and Darija (Moroccan Arabic).",
   "main": "index.js",

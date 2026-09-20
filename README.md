@@ -1,8 +1,8 @@
-# UltraPC WhatsApp Bot
+# Tourism WhatsApp Bot
 
 A WhatsApp bot that answers customer questions using your own JSON database (products, prices, FAQ, etc.), in **English, French, Arabic, and Darija (Moroccan Arabic)** — auto-detected per message.
 
-How it works: every incoming WhatsApp message is sent to Claude along with your full `database.json` as context. Claude answers strictly from that data, in whatever language/script the customer used.
+How it works: each incoming WhatsApp message is answered by Gemini using the most relevant parts of `database.json`, plus recent chat context. This is faster and keeps business answers grounded in your data.
 
 ## 1. Requirements
 
@@ -21,7 +21,7 @@ Open `.env` and paste your `GEMINI_API_KEY` (see `.env.example`).
 
 ## 3. Add your data
 
-Edit `database.json` with your real catalog / FAQ. Structure is up to you — Claude reads the whole file as context, it doesn't need a fixed schema. Keep it reasonably sized (a few hundred products/entries is fine; if it grows into the thousands, see "Scaling up" below).
+Edit `database.json` with your real catalog / FAQ. Structure is up to you. The bot detects changes automatically and selects relevant entries for each question, so it stays responsive as the catalog grows.
 
 ## 4. Run it
 
@@ -64,7 +64,7 @@ Message the connected number from another phone, in any of the four languages:
 
 ```bash
 npm install -g pm2
-pm2 start index.js --name ultrapc-bot
+pm2 start index.js --name tourism-bot
 pm2 save
 pm2 startup   # follow the printed instructions to enable on boot
 ```
@@ -74,7 +74,7 @@ pm2 startup   # follow the printed instructions to enable on boot
 - **Unofficial connection**: this uses Baileys, which connects the same way WhatsApp Web does. It's free and has no approval process, but WhatsApp can in theory flag/ban numbers that send high volumes or behave like spam. For a low/medium-volume support bot this is normally fine; for high-volume or business-critical use, consider migrating to the official WhatsApp Business API later — the answering logic in `claudeHandler.js` doesn't need to change, only `index.js`.
 - **Conversation memory**: the bot remembers the last few messages per customer (set by `HISTORY_LIMIT` in `.env`) so it can handle follow-ups like "and in MAD?". This memory resets when the bot restarts — it's not saved to disk.
 - **Groups are ignored**: the bot only replies in 1-on-1 chats.
-- **Scaling up**: if your database gets large (thousands of items), sending the whole JSON on every message gets slow and expensive. At that point, swap `getDatabaseContext()` in `claudeHandler.js` for a search step (e.g. filter products by keyword, or use a vector search) that only sends the relevant subset to Claude. Happy to help build that when you get there.
+- **Speed and reliability**: the database is cached and searched locally before each AI call, duplicate WhatsApp deliveries are ignored, and messages from one customer are processed in order. Configure `AI_TIMEOUT_MS` if you need a longer or shorter AI wait.
 
 ## File overview
 

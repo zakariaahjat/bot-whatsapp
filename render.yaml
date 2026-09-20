@@ -13,7 +13,7 @@ services:
         value: gemini-3.6-flash
         sync: false
       - key: BUSINESS_NAME
-        value: UltraPC.ma
+        value: Tourism Bot
         sync: false
       - key: HISTORY_LIMIT
         value: "6"

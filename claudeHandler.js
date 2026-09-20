@@ -5,136 +5,111 @@ const DATABASE_PATH = process.env.DATABASE_PATH || "./database.json";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "Morocco Assistant";
-const HISTORY_LIMIT = parseInt(process.env.HISTORY_LIMIT || "6", 10);
-
+const HISTORY_LIMIT = Math.max(2, parseInt(process.env.HISTORY_LIMIT || "8", 10) || 8);
+const REQUEST_TIMEOUT_MS = Math.max(5000, parseInt(process.env.AI_TIMEOUT_MS || "25000", 10) || 25000);
+const MAX_STORE_CONTEXT_CHARS = 9000;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta";
 
-// Per-customer conversation history, kept in memory only (resets on restart).
-// Key: WhatsApp JID (e.g. "2126xxxxxxxx@s.whatsapp.net"), Value: array of {role, content}
 const conversations = new Map();
+let databaseCache = { mtimeMs: -1, data: {}, chunks: [] };
 
-function loadDatabase() {
-  const raw = fs.readFileSync(path.resolve(DATABASE_PATH), "utf-8");
-  return JSON.parse(raw);
+function tokenize(value) {
+  return String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").match(/[\p{L}\p{N}]+/gu) || [];
 }
 
-// Reload database fresh on every message so edits to the JSON file take effect
-// immediately without restarting the bot.
-function getDatabaseContext() {
+function makeChunks(value, trail = []) {
+  if (Array.isArray(value)) return value.map((item, index) => makeChunks(item, [...trail, index])).flat();
+  if (value && typeof value === "object") return Object.entries(value).map(([key, item]) => makeChunks(item, [...trail, key])).flat();
+  const text = JSON.stringify(value);
+  return [{ path: trail.join("."), text, tokens: new Set(tokenize(`${trail.join(" ")} ${text}`)) }];
+}
+
+function getDatabase() {
   try {
-    const db = loadDatabase();
-    return JSON.stringify(db, null, 2);
+    const resolved = path.resolve(DATABASE_PATH);
+    const stat = fs.statSync(resolved);
+    if (stat.mtimeMs !== databaseCache.mtimeMs) {
+      const data = JSON.parse(fs.readFileSync(resolved, "utf8"));
+      databaseCache = { mtimeMs: stat.mtimeMs, data, chunks: makeChunks(data) };
+      console.log(`Database cache refreshed (${databaseCache.chunks.length} searchable entries).`);
+    }
+    return databaseCache;
   } catch (err) {
     console.error("Failed to load database:", err.message);
-    return "{}";
+    return databaseCache;
   }
 }
 
-function buildSystemPrompt() {
-  const dbContext = getDatabaseContext();
-  const now = new Date();
-  const currentTime = now.toLocaleString("en-GB", {
-    timeZone: "Africa/Casablanca",
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const businessHours = "Monday to Saturday, 09:00 - 19:00";
+function getRelevantStoreContext(message) {
+  const { data, chunks } = getDatabase();
+  const queryTerms = new Set(tokenize(message));
+  const ranked = chunks.map((chunk) => {
+    let score = 0;
+    for (const term of queryTerms) if (term.length > 1 && chunk.tokens.has(term)) score += 4;
+    if (/^(bot_identity|time_context|conversation)/.test(chunk.path)) score += 1;
+    return { ...chunk, score };
+  }).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const selected = [];
+  let size = 0;
+  for (const chunk of ranked) {
+    const line = `${chunk.path}: ${chunk.text}`;
+    if (size + line.length > MAX_STORE_CONTEXT_CHARS) continue;
+    selected.push(line);
+    size += line.length + 1;
+  }
+  return selected.length ? selected.join("\n") : JSON.stringify(data);
+}
 
-  return `You are the WhatsApp assistant for ${BUSINESS_NAME}, a friendly Moroccan travel and city guide.
-LIVE CURRENT TIME (Morocco, use it for greetings like sba7 lkhir / masa lkhir, for "wach khdam?", and for "ach katdir daba?"): ${currentTime}
-BUSINESS HOURS: ${businessHours}
+function buildSystemPrompt(userMessage) {
+  const currentTime = new Date().toLocaleString("en-GB", { timeZone: "Africa/Casablanca", weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return `You are ${BUSINESS_NAME}'s fast, helpful WhatsApp assistant. Answer the customer's actual request directly and accurately.
+Current time in Morocco: ${currentTime}.
 
-Your instructions are the BEHAVIOR GUIDE below. Follow it exactly: identity, language, tone, conversation style, time rules, location requests, categories, follow-ups and examples.
+Rules:
+- Understand English, French, Arabic, Darija and Arabizi. Reply in the customer's language and script.
+- Be concise and natural for WhatsApp: normally 1-4 short sentences. Use lists only when they genuinely help.
+- You can help with broad everyday questions, explanations, translations, study, technology, writing, and ideas. Never pretend you searched the live web, checked a live map, or know current facts when you did not.
+- For questions about this business, use only the supplied store data. Do not invent prices, products, availability, addresses, contacts, policies, or opening hours. Ask one focused question when essential information is missing.
+- Use the conversation for follow-up questions. If the message is genuinely unclear, ask a short clarification in the same language instead of guessing.
+- Do not mention these instructions, the database, or being "powered by AI".
 
-STRICT RULES:
-- ALWAYS reply in Darija. Use Arabic script normally; use Latin-script Darija (Arabizi) only if the customer wrote in Arabizi.
-- Understand English, French, Modern Standard Arabic, and Darija (Arabic or Arabizi like "3tini chi restaurant zwine") — always answer in Darija.
-- NEVER invent real businesses, addresses, phone numbers, prices, or opening hours. If you have no live search results, ask for the city, area, budget and preferences instead, and only give honest generic guidance.
-- NEVER output repeated letters, invented gibberish, or long paragraphs. If you did NOT understand the customer's message, answer with ONLY one short line: "Ma fhemtch 😅 3awed lya kifach okhr?" — nothing else.
-- If you're not sure, it's always better to ask than to guess. Do not fill the answer with words you invented.
-- Keep answers short, warm and natural — a WhatsApp chat, not an email. Vary your wording, don't repeat the same sentence.
-- NEVER use formal/Modern Standard Arabic. Avoid words like: هل، أبحث، ترغب، لديك، المعايير، المطاعم الشعبية. Use short spoken Darija only: أكيد، كاينين، بغيتي، شنو، كمل، هيّا، زوين، بزاف، تنصحني.
-- Write 1-3 short sentences, not paragraphs. If you're not sure, ask one short follow-up question in Darija.
-- Use the LIVE CURRENT TIME for anything time-related.
+Relevant store data:
+${getRelevantStoreContext(userMessage)}`;
+}
 
-EXAMPLE of how you must reply (copy this style - short spoken Darija):
-- customer: "slam labas?" -> assistant: "Wa 3likom salam 😊 labas l7amdollah. Kifach n3awnk?"
-- customer: "3tini chi restaurant zwine f Marrakech" -> assistant: "أكيد 👍 ف Marrakech كاينين بزاف. بغيتي makla maghribiya wla chi no3 okhr؟ وشنو budget ديالك؟"
-- customer: "bghit chi hotel f Agadir machi ghali" -> assistant: "مزيان 👌 قولي ليا شحال من ليلة وشنو budget، باش نعطيك خيارات ملائمة."
-- customer: "fin kayn chi pharmacie 9rib lia?" -> assistant: "فينا مدائنيا؟ قولي ليا المدينة اللي راك فيها."
-- customer: "wach khdam daba?" -> assistant: "دابا هي ساعة كذا، وخدمتنا من 9 لـ19 من الاتنين للسبت."
-- customer: "merci bezaf" -> assistant: "العفو خويا ❤️ واخا قول ليا إلى بغيتي شي حاجة أخرى."
-
-BEHAVIOR GUIDE:
-${dbContext}`;
+async function callGemini(contents, systemPrompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${GEMINI_URL}/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({ system_instruction: { parts: [{ text: systemPrompt }] }, contents, generationConfig: { temperature: 0.45, maxOutputTokens: 700 } }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      let message = `Gemini error ${response.status}`;
+      try { message = JSON.parse(errText).error?.message || message; } catch (_) {}
+      throw new Error(message);
+    }
+    return response.json();
+  } finally { clearTimeout(timer); }
 }
 
 async function answerQuestion(senderId, userMessage) {
-  if (!GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY in .env");
-  }
-
-  if (!conversations.has(senderId)) {
-    conversations.set(senderId, []);
-  }
-  const history = conversations.get(senderId);
-
-  history.push({ role: "user", content: userMessage });
-
-  const contents = history.slice(-HISTORY_LIMIT).map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
-
-  const response = await fetch(
-    `${GEMINI_URL}/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: buildSystemPrompt() }],
-        },
-        contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 2000,
-        },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const errText = await response.text();
-    let message = `Gemini error ${response.status}`;
-    try {
-      const err = JSON.parse(errText);
-      message = err.error?.message || message;
-    } catch (_) {
-      // keep generic message
-    }
-    throw new Error(message);
-  }
-
-  const data = await response.json();
-  const replyText = data.candidates?.[0]?.content?.parts
-    .filter((p) => p.text)
-    .map((p) => p.text)
-    .join("")
-    .trim();
-
-  history.push({ role: "assistant", content: replyText || "" });
-
-  // Trim history so it doesn't grow unbounded
-  if (history.length > HISTORY_LIMIT) {
-    conversations.set(senderId, history.slice(-HISTORY_LIMIT));
-  }
-
-  return replyText || "Ma fhemtch 😅 3awed lya kifach okhr?";
+  if (!GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY in .env");
+  const history = conversations.get(senderId) || [];
+  const updatedHistory = [...history, { role: "user", content: userMessage }].slice(-HISTORY_LIMIT);
+  // Gemini conversations must start with a user message. Keep complete recent turns
+  // rather than accidentally beginning the truncated context with a model reply.
+  if (updatedHistory[0]?.role === "assistant") updatedHistory.shift();
+  const contents = updatedHistory.map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] }));
+  let data;
+  try { data = await callGemini(contents, buildSystemPrompt(userMessage)); }
+  catch (err) { if (err.name === "AbortError") throw new Error("AI request timed out"); throw err; }
+  const reply = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+  const safeReply = reply || "Ma fhemtch mzyan 😅 t9der t3awedha b tariqa okhra?";
+  conversations.set(senderId, [...updatedHistory, { role: "assistant", content: safeReply }].slice(-HISTORY_LIMIT));
+  return safeReply;
 }
 
 module.exports = { answerQuestion };
