@@ -82,7 +82,7 @@
         {
           "user": "lila sa3ida",
           "responses": [
-            "Allah yessellik 😴",
+            "Allah yslmk 😴",
             "lila sa3ida khoya ❤️"
           ]
         }
@@ -100,6 +100,15 @@
           "user": "ach kadir daba?",
           "intent": "small_talk_current_activity",
           "response_behavior": "use_current_time_context"
+        },
+        {
+          "user": "kanbghik",
+          "meaning": "I love you (Moroccan Darija / Arabizi)",
+          "note": "kanbghik (also written nbaghik / kanhebik) = 'I love you' in Dareja. Reply warmly and kindly, flirt back a little like a friendly Moroccan assistant, then steer back to helping."
+        },
+        {
+          "user": "i love you",
+          "note": "Reply warmly in the customer's language, thank them kindly, and steer back to helping."
         },
         {
           "user": "fin nta?",
@@ -296,6 +305,30 @@
         "city": "Tanger"
       }
     ]
+  },
+
+  "place_links": {
+    "usage": "Ila sowlok fin jat chi mdina wla fin kayna (matalan 'fin jat Marrakech?', 'fin kayna Casablanca?'), jawb b 1-2 djomal o zid dayman lien Google Maps dyal had lmdina (khodo mn 'place_links.<City>.google_map'). Ma tsaybch lien lan ma kaynach f had liste.",
+    "Marrakech": { "google_map": "https://www.google.com/maps/search/?api=1&query=Marrakech,Morocco" },
+    "Casablanca": { "google_map": "https://www.google.com/maps/search/?api=1&query=Casablanca,Morocco" },
+    "Rabat": { "google_map": "https://www.google.com/maps/search/?api=1&query=Rabat,Morocco" },
+    "Tanger": { "google_map": "https://www.google.com/maps/search/?api=1&query=Tanger,Morocco" },
+    "Agadir": { "google_map": "https://www.google.com/maps/search/?api=1&query=Agadir,Morocco" },
+    "Fes": { "google_map": "https://www.google.com/maps/search/?api=1&query=Fes,Morocco" },
+    "Meknes": { "google_map": "https://www.google.com/maps/search/?api=1&query=Meknes,Morocco" },
+    "Essaouira": { "google_map": "https://www.google.com/maps/search/?api=1&query=Essaouira,Morocco" },
+    "Oujda": { "google_map": "https://www.google.com/maps/search/?api=1&query=Oujda,Morocco" },
+    "Tetouan": { "google_map": "https://www.google.com/maps/search/?api=1&query=Tetouan,Morocco" },
+    "El Jadida": { "google_map": "https://www.google.com/maps/search/?api=1&query=El%20Jadida,Morocco" },
+    "Safi": { "google_map": "https://www.google.com/maps/search/?api=1&query=Safi,Morocco" },
+    "Kenitra": { "google_map": "https://www.google.com/maps/search/?api=1&query=Kenitra,Morocco" },
+    "Mohammedia": { "google_map": "https://www.google.com/maps/search/?api=1&query=Mohammedia,Morocco" },
+    "Chefchaouen": { "google_map": "https://www.google.com/maps/search/?api=1&query=Chefchaouen,Morocco" },
+    "Ifrane": { "google_map": "https://www.google.com/maps/search/?api=1&query=Ifrane,Morocco" },
+    "Ouarzazate": { "google_map": "https://www.google.com/maps/search/?api=1&query=Ouarzazate,Morocco" },
+    "Merzouga": { "google_map": "https://www.google.com/maps/search/?api=1&query=Merzouga,Morocco" },
+    "Dakhla": { "google_map": "https://www.google.com/maps/search/?api=1&query=Dakhla,Morocco" },
+    "Laayoune": { "google_map": "https://www.google.com/maps/search/?api=1&query=Laayoune,Morocco" }
   },
 
   "recommendation_categories": {

@@ -9,6 +9,9 @@ const HISTORY_LIMIT = Math.max(2, parseInt(process.env.HISTORY_LIMIT || "8", 10)
 const REQUEST_TIMEOUT_MS = Math.max(5000, parseInt(process.env.AI_TIMEOUT_MS || "25000", 10) || 25000);
 const MAX_STORE_CONTEXT_CHARS = 9000;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta";
+const OLLAMA_URL = (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/+$/, "");
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:7b";
+const OLLAMA_TIMEOUT_MS = Math.max(5000, parseInt(process.env.OLLAMA_TIMEOUT_MS || "39000", 10) || 39000);
 
 const conversations = new Map();
 let databaseCache = { mtimeMs: -1, data: {}, chunks: [] };
@@ -69,6 +72,7 @@ Rules:
 - Understand English, French, Arabic, Darija and Arabizi. Reply in the customer's language and script.
 - Be concise and natural for WhatsApp: normally 1-4 short sentences. Use lists only when they genuinely help.
 - You can help with broad everyday questions, explanations, translations, study, technology, writing, and ideas. Never pretend you searched the live web, checked a live map, or know current facts when you did not.
+- When the customer asks where a city or place is ('fin jat X?', 'fin kayn X?', 'fino kayna X?'), answer briefly with its region and ALWAYS include that place's Google Maps link from the store data (field google_map). Never invent or guess a link that is not in the store data.
 - For questions about this business, use only the supplied store data. Do not invent prices, products, availability, addresses, contacts, policies, or opening hours. Ask one focused question when essential information is missing.
 - Use the conversation for follow-up questions. If the message is genuinely unclear, ask a short clarification in the same language instead of guessing.
 - Do not mention these instructions, the database, or being "powered by AI".
@@ -83,7 +87,7 @@ async function callGemini(contents, systemPrompt) {
   try {
     const response = await fetch(`${GEMINI_URL}/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-      body: JSON.stringify({ system_instruction: { parts: [{ text: systemPrompt }] }, contents, generationConfig: { temperature: 0.45, maxOutputTokens: 700 } }),
+      body: JSON.stringify({ system_instruction: { parts: [{ text: systemPrompt }] }, contents, generationConfig: { temperature: 0.45, maxOutputTokens: 2048 } }),
     });
     if (!response.ok) {
       const errText = await response.text();
@@ -91,22 +95,54 @@ async function callGemini(contents, systemPrompt) {
       try { message = JSON.parse(errText).error?.message || message; } catch (_) {}
       throw new Error(message);
     }
-    return response.json();
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
+  } finally { clearTimeout(timer); }
+}
+
+async function callOllama(contents, systemPrompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+  try {
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...contents.map((message) => ({ role: message.role === "model" ? "assistant" : "user", content: message.parts.map((part) => part.text || "").join("") })),
+    ];
+    const response = await fetch(`${OLLAMA_URL}/v1/chat/completions`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({ model: OLLAMA_MODEL, messages, stream: false, keep_alive: -1, options: { temperature: 0.45, num_predict: 800 } }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Ollama error ${response.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || "";
   } finally { clearTimeout(timer); }
 }
 
 async function answerQuestion(senderId, userMessage) {
-  if (!GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY in .env");
   const history = conversations.get(senderId) || [];
   const updatedHistory = [...history, { role: "user", content: userMessage }].slice(-HISTORY_LIMIT);
-  // Gemini conversations must start with a user message. Keep complete recent turns
+  // AI conversations must start with a user message. Keep complete recent turns
   // rather than accidentally beginning the truncated context with a model reply.
   if (updatedHistory[0]?.role === "assistant") updatedHistory.shift();
   const contents = updatedHistory.map((message) => ({ role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] }));
-  let data;
-  try { data = await callGemini(contents, buildSystemPrompt(userMessage)); }
-  catch (err) { if (err.name === "AbortError") throw new Error("AI request timed out"); throw err; }
-  const reply = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+  const systemPrompt = buildSystemPrompt(userMessage);
+
+  let reply = "";
+  try {
+    try {
+      reply = await callOllama(contents, systemPrompt);
+    } catch (err) {
+      console.error("Ollama request failed, falling back to Gemini:", err.message);
+      reply = await callGemini(contents, systemPrompt);
+    }
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("AI request timed out");
+    throw err;
+  }
+
   const safeReply = reply || "Ma fhemtch mzyan 😅 t9der t3awedha b tariqa okhra?";
   conversations.set(senderId, [...updatedHistory, { role: "assistant", content: safeReply }].slice(-HISTORY_LIMIT));
   return safeReply;
